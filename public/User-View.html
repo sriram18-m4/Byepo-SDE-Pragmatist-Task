@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Feature Flag Status</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>User Feature Lookup</h1>
+    <p>Check whether a feature is enabled for your organization.</p>
+  </header>
+
+  <main>
+    <section id="loginPanel" class="panel">
+      <h2>Sign in</h2>
+      <form id="loginForm">
+        <label for="orgSlug">Organization slug</label>
+        <input id="orgSlug" value="acme" required>
+
+        <label for="email">Email</label>
+        <input id="email" type="email" value="user@acme.test" required>
+
+        <label for="password">Password</label>
+        <input id="password" type="password" value="user123" required>
+
+        <div class="actions">
+          <button type="submit">Sign in</button>
+        </div>
+        <p id="loginStatus" class="status"></p>
+      </form>
+    </section>
+
+    <section id="lookupPanel" class="panel hidden">
+      <h2>Feature status</h2>
+      <form id="lookupForm">
+        <label for="featureKey">Feature key</label>
+        <input id="featureKey" value="new_checkout" required>
+
+        <div class="actions">
+          <button type="submit">Check status</button>
+          <button type="button" class="secondary" id="logoutButton">Logout</button>
+        </div>
+      </form>
+
+      <div class="status-card" id="resultCard">
+        <span class="status-dot" id="statusDot"></span>
+        <strong id="statusText">Enter a feature key to check status.</strong>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const tokenKey = 'endUserToken';
+    const loginPanel = document.getElementById('loginPanel');
+    const lookupPanel = document.getElementById('lookupPanel');
+    const loginStatus = document.getElementById('loginStatus');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+
+    function getToken() {
+      return localStorage.getItem(tokenKey);
+    }
+
+    function setSignedIn(isSignedIn) {
+      loginPanel.classList.toggle('hidden', isSignedIn);
+      lookupPanel.classList.toggle('hidden', !isSignedIn);
+    }
+
+    function escapeText(value) {
+      return String(value ?? '');
+    }
+
+    function showStatus(state, message) {
+      statusDot.className = `status-dot ${state}`;
+      statusText.textContent = message;
+    }
+
+    document.getElementById('loginForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      loginStatus.textContent = 'Signing in...';
+
+      try {
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            organization_slug: document.getElementById('orgSlug').value,
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Login failed');
+        if (data.user.role !== 'END_USER') throw new Error('This page requires the END_USER role');
+
+        localStorage.setItem(tokenKey, data.token);
+        loginStatus.textContent = '';
+        setSignedIn(true);
+      } catch (err) {
+        loginStatus.textContent = err.message;
+      }
+    });
+
+    document.getElementById('lookupForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const featureKey = document.getElementById('featureKey').value.trim();
+      showStatus('', 'Checking...');
+
+      try {
+        const response = await fetch(`/api/end-user/feature-flags/${encodeURIComponent(featureKey)}/status`, {
+          headers: {
+            Authorization: `Bearer ${getToken()}`
+          }
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Lookup failed');
+
+        if (!data.exists) {
+          showStatus('off', `${escapeText(data.feature_key)} was not found for this organization.`);
+          return;
+        }
+
+        showStatus(data.enabled ? 'on' : 'off', `${escapeText(data.feature_key)} is ${data.enabled ? 'enabled' : 'disabled'}.`);
+      } catch (err) {
+        showStatus('off', err.message);
+      }
+    });
+
+    document.getElementById('logoutButton').addEventListener('click', () => {
+      localStorage.removeItem(tokenKey);
+      setSignedIn(false);
+      showStatus('', 'Enter a feature key to check status.');
+    });
+
+    if (getToken()) {
+      setSignedIn(true);
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,254 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Super Admin</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Super Admin Dashboard</h1>
+    <p>Manage tenant organizations and send admin setup links.</p>
+  </header>
+
+  <main>
+    <section id="loginPanel" class="panel">
+      <h2>Sign in</h2>
+      <form id="loginForm">
+        <label for="email">Email</label>
+        <input id="email" type="email" value="super@local.test" required>
+
+        <label for="password">Password</label>
+        <input id="password" type="password" value="super-password" required>
+
+        <div class="actions">
+          <button type="submit">Sign in</button>
+        </div>
+        <p id="loginStatus" class="status"></p>
+      </form>
+    </section>
+
+    <section id="dashboard" class="hidden">
+      <div class="grid">
+        <section class="panel">
+          <h2>Create organization</h2>
+          <form id="orgForm">
+            <label for="orgName">Organization name</label>
+            <input id="orgName" placeholder="Acme Retail" required>
+
+            <label for="orgSlug">Organization slug</label>
+            <input id="orgSlug" placeholder="acme" required>
+
+            <label for="adminName">Admin name</label>
+            <input id="adminName" placeholder="Ava Admin" required>
+
+            <label for="adminEmail">Admin email</label>
+            <input id="adminEmail" type="email" placeholder="admin@acme.test" required>
+
+            <div class="actions">
+              <button type="submit">Create tenant</button>
+              <button type="button" class="secondary" id="refreshButton">Refresh</button>
+              <button type="button" class="secondary" id="logoutButton">Logout</button>
+            </div>
+            <p id="createStatus" class="status"></p>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h2>Organizations</h2>
+          <div id="organizations" class="list"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const API_BASE = '';
+    const tokenKey = 'superAdminToken';
+    const loginPanel = document.getElementById('loginPanel');
+    const dashboard = document.getElementById('dashboard');
+    const loginStatus = document.getElementById('loginStatus');
+    const createStatus = document.getElementById('createStatus');
+    const organizationsEl = document.getElementById('organizations');
+
+    function getToken() {
+      return localStorage.getItem(tokenKey);
+    }
+
+    function setSignedIn(isSignedIn) {
+      loginPanel.classList.toggle('hidden', isSignedIn);
+      dashboard.classList.toggle('hidden', !isSignedIn);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function isActive(value) {
+      return value === true || value === 1 || value === '1';
+    }
+
+    async function request(path, options = {}) {
+      const response = await fetch(API_BASE + path, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}`,
+          ...(options.headers || {})
+        }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Request failed');
+      return data;
+    }
+
+    async function loadOrganizations() {
+      organizationsEl.innerHTML = '<p class="meta">Loading organizations...</p>';
+      try {
+        const data = await request('/api/super-admin/organizations');
+        if (!data.organizations.length) {
+          organizationsEl.innerHTML = '<p class="meta">No organizations yet.</p>';
+          return;
+        }
+
+        organizationsEl.innerHTML = data.organizations.map((org) => `
+          <article class="item">
+            <h3>${escapeHtml(org.name)}</h3>
+            <div class="meta">Slug: ${escapeHtml(org.slug)}</div>
+            <div class="meta">Tenant ID: ${escapeHtml(org.tenant_id)}</div>
+            <div class="meta">Admin: ${escapeHtml(org.admin_email || 'Not assigned')}</div>
+            <span class="badge ${isActive(org.is_active) ? 'on' : 'off'}">${isActive(org.is_active) ? 'Active' : 'Inactive'}</span>
+            <div class="meta">${escapeHtml(org.user_count)} users, ${escapeHtml(org.flag_count)} flags</div>
+            <div class="actions">
+              <button class="secondary" data-action="admin-reset" data-tenant="${escapeHtml(org.tenant_id)}">Send admin reset link</button>
+              <button class="secondary" data-action="toggle" data-tenant="${escapeHtml(org.tenant_id)}" data-name="${escapeHtml(org.name)}" data-slug="${escapeHtml(org.slug)}" data-active="${isActive(org.is_active) ? '1' : '0'}">
+                ${isActive(org.is_active) ? 'Deactivate' : 'Activate'}
+              </button>
+              <button class="danger" data-action="delete" data-tenant="${escapeHtml(org.tenant_id)}">Delete</button>
+            </div>
+          </article>
+        `).join('');
+      } catch (err) {
+        organizationsEl.innerHTML = `<p class="status">${err.message}</p>`;
+      }
+    }
+
+    document.getElementById('loginForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      loginStatus.textContent = 'Signing in...';
+
+      try {
+        const response = await fetch('/api/auth/super-admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Login failed');
+
+        localStorage.setItem(tokenKey, data.token);
+        loginStatus.textContent = '';
+        setSignedIn(true);
+        await loadOrganizations();
+      } catch (err) {
+        loginStatus.textContent = err.message;
+      }
+    });
+
+    document.getElementById('orgForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      createStatus.textContent = 'Creating organization...';
+
+      try {
+        const data = await request('/api/super-admin/organizations', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: document.getElementById('orgName').value,
+            slug: document.getElementById('orgSlug').value,
+            admin_name: document.getElementById('adminName').value,
+            admin_email: document.getElementById('adminEmail').value
+          })
+        });
+        event.target.reset();
+        if (data.admin_setup?.sent) {
+          createStatus.textContent = 'Organization created. Admin setup link was emailed.';
+        } else if (data.admin_setup?.resetLink) {
+          createStatus.innerHTML = `Organization created. Local setup link: <a href="${escapeHtml(data.admin_setup.resetLink)}">${escapeHtml(data.admin_setup.resetLink)}</a>`;
+        } else {
+          createStatus.textContent = 'Organization created.';
+        }
+        await loadOrganizations();
+      } catch (err) {
+        createStatus.textContent = err.message;
+      }
+    });
+
+    organizationsEl.addEventListener('click', async (event) => {
+      const button = event.target.closest('button');
+      if (!button) return;
+
+      const tenantId = button.dataset.tenant;
+      const action = button.dataset.action;
+
+      try {
+        if (action === 'admin-reset') {
+          const data = await request(`/api/super-admin/organizations/${tenantId}/admin-reset`, {
+            method: 'POST'
+          });
+
+          if (data.admin_setup?.sent) {
+            alert('Admin reset link was emailed.');
+          } else if (data.admin_setup?.resetLink) {
+            alert(`Local admin reset link:\n${data.admin_setup.resetLink}`);
+          } else {
+            alert(data.message || 'Admin reset link created.');
+          }
+        }
+
+        if (action === 'toggle') {
+          await request(`/api/super-admin/organizations/${tenantId}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+              name: button.dataset.name,
+              slug: button.dataset.slug,
+              is_active: button.dataset.active !== '1'
+            })
+          });
+        }
+
+        if (action === 'delete') {
+          const confirmed = confirm('Delete this organization and all tenant data?');
+          if (!confirmed) return;
+          await request(`/api/super-admin/organizations/${tenantId}`, {
+            method: 'DELETE'
+          });
+        }
+
+        await loadOrganizations();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+
+    document.getElementById('refreshButton').addEventListener('click', loadOrganizations);
+    document.getElementById('logoutButton').addEventListener('click', () => {
+      localStorage.removeItem(tokenKey);
+      setSignedIn(false);
+    });
+
+    if (getToken()) {
+      setSignedIn(true);
+      loadOrganizations();
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,334 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Organization Admin</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>Organization Admin Panel</h1>
+    <p>Create feature flags and manage the user login for your tenant.</p>
+  </header>
+
+  <main>
+    <section id="loginPanel" class="panel">
+      <h2>Sign in</h2>
+      <form id="loginForm">
+        <label for="orgSlug">Organization slug</label>
+        <input id="orgSlug" value="acme" required>
+
+        <label for="email">Email</label>
+        <input id="email" type="email" value="admin@acme.test" required>
+
+        <label for="password">Password</label>
+        <input id="password" type="password" value="admin123" required>
+
+        <div class="actions">
+          <button type="submit">Sign in</button>
+        </div>
+        <p id="loginStatus" class="status"></p>
+      </form>
+    </section>
+
+    <section id="dashboard" class="hidden">
+      <div class="grid">
+        <section class="panel">
+          <h2>Create feature flag</h2>
+          <form id="flagForm">
+            <label for="featureKey">Feature key</label>
+            <input id="featureKey" placeholder="new_checkout" required>
+
+            <label for="flagName">Display name</label>
+            <input id="flagName" placeholder="New Checkout" required>
+
+            <label for="description">Description</label>
+            <textarea id="description" placeholder="What this flag controls"></textarea>
+
+            <label for="enabled">Initial status</label>
+            <select id="enabled">
+              <option value="false">Disabled</option>
+              <option value="true">Enabled</option>
+            </select>
+
+            <div class="actions">
+              <button type="submit">Create flag</button>
+              <button type="button" class="secondary" id="refreshButton">Refresh</button>
+              <button type="button" class="secondary" id="logoutButton">Logout</button>
+            </div>
+            <p id="formStatus" class="status"></p>
+          </form>
+        </section>
+
+        <section class="panel">
+          <h2>Feature flags</h2>
+          <div id="flags" class="list"></div>
+        </section>
+
+        <section class="panel">
+          <h2>User profile</h2>
+          <div id="userNotice" class="notice hidden">
+            No end-user profile exists for this organization yet. Create one so users can log in and check feature status.
+          </div>
+          <div id="userExistsNotice" class="notice success-notice hidden">
+            Shared end-user profile already exists for this organization.
+          </div>
+          <form id="userForm">
+            <label for="userName">User name</label>
+            <input id="userName" placeholder="Infotech User" required>
+
+            <label for="userEmail">User email</label>
+            <input id="userEmail" type="email" placeholder="user@infotech.com" required>
+
+            <label for="userPassword">User password</label>
+            <input id="userPassword" type="password" placeholder="At least 8 characters" required>
+
+            <div class="actions">
+              <button type="submit">Create user profile</button>
+            </div>
+            <p id="userStatus" class="status"></p>
+          </form>
+          <div id="users" class="list compact-list"></div>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const tokenKey = 'orgAdminToken';
+    const loginPanel = document.getElementById('loginPanel');
+    const dashboard = document.getElementById('dashboard');
+    const loginStatus = document.getElementById('loginStatus');
+    const formStatus = document.getElementById('formStatus');
+    const userStatus = document.getElementById('userStatus');
+    const flagsEl = document.getElementById('flags');
+    const usersEl = document.getElementById('users');
+    const userNotice = document.getElementById('userNotice');
+    let flagCache = new Map();
+
+    function getToken() {
+      return localStorage.getItem(tokenKey);
+    }
+
+    function setSignedIn(isSignedIn) {
+      loginPanel.classList.toggle('hidden', isSignedIn);
+      dashboard.classList.toggle('hidden', !isSignedIn);
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;');
+    }
+
+    function isEnabled(value) {
+      return value === true || value === 1 || value === '1';
+    }
+
+    async function request(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${getToken()}`,
+          ...(options.headers || {})
+        }
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.message || 'Request failed');
+      return data;
+    }
+
+    async function loadFlags() {
+      flagsEl.innerHTML = '<p class="meta">Loading flags...</p>';
+      try {
+        const data = await request('/api/org-admin/feature-flags');
+        if (!data.flags.length) {
+          flagCache = new Map();
+          flagsEl.innerHTML = '<p class="meta">No flags yet.</p>';
+          return;
+        }
+
+        flagCache = new Map(data.flags.map((flag) => [String(flag.id), flag]));
+
+        flagsEl.innerHTML = data.flags.map((flag) => `
+          <article class="item">
+            <h3>${escapeHtml(flag.name)}</h3>
+            <div class="meta">Key: ${escapeHtml(flag.feature_key)}</div>
+            <div class="meta">${escapeHtml(flag.description || 'No description')}</div>
+            <span class="badge ${isEnabled(flag.enabled) ? 'on' : 'off'}">${isEnabled(flag.enabled) ? 'Enabled' : 'Disabled'}</span>
+            <div class="actions">
+              <button class="${isEnabled(flag.enabled) ? 'secondary' : 'success'}" data-action="toggle" data-id="${escapeHtml(flag.id)}" data-enabled="${isEnabled(flag.enabled) ? '1' : '0'}">
+                ${isEnabled(flag.enabled) ? 'Disable' : 'Enable'}
+              </button>
+              <button class="secondary" data-action="edit" data-id="${escapeHtml(flag.id)}">Edit</button>
+              <button class="danger" data-action="delete" data-id="${escapeHtml(flag.id)}">Delete</button>
+            </div>
+          </article>
+        `).join('');
+      } catch (err) {
+        flagsEl.innerHTML = `<p class="status">${err.message}</p>`;
+      }
+    }
+
+    async function loadUsers() {
+      usersEl.innerHTML = '<p class="meta">Loading users...</p>';
+
+      try {
+        const data = await request('/api/org-admin/users');
+        userNotice.classList.toggle('hidden', data.has_end_users);
+        document.getElementById('userExistsNotice').classList.toggle('hidden', !data.has_end_users);
+        document.getElementById('userForm').classList.toggle('hidden', data.has_end_users);
+
+        if (!data.users.length) {
+          usersEl.innerHTML = '<p class="meta">No end-user profile created yet.</p>';
+          return;
+        }
+
+        usersEl.innerHTML = data.users.map((user) => `
+          <article class="item">
+            <h3>${escapeHtml(user.name)}</h3>
+            <div class="meta">${escapeHtml(user.email)}</div>
+            <span class="badge ${user.is_active ? 'on' : 'off'}">${user.is_active ? 'Active' : 'Inactive'}</span>
+          </article>
+        `).join('');
+      } catch (err) {
+        usersEl.innerHTML = `<p class="status">${err.message}</p>`;
+      }
+    }
+
+    document.getElementById('loginForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      loginStatus.textContent = 'Signing in...';
+
+      try {
+        const response = await fetch('/api/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            organization_slug: document.getElementById('orgSlug').value,
+            email: document.getElementById('email').value,
+            password: document.getElementById('password').value
+          })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.message || 'Login failed');
+        if (data.user.role !== 'ORG_ADMIN') throw new Error('This page requires the ORG_ADMIN role');
+
+        localStorage.setItem(tokenKey, data.token);
+        loginStatus.textContent = '';
+        setSignedIn(true);
+        await Promise.all([loadFlags(), loadUsers()]);
+      } catch (err) {
+        loginStatus.textContent = err.message;
+      }
+    });
+
+    document.getElementById('userForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      userStatus.textContent = 'Creating user profile...';
+
+      try {
+        await request('/api/org-admin/users', {
+          method: 'POST',
+          body: JSON.stringify({
+            name: document.getElementById('userName').value,
+            email: document.getElementById('userEmail').value,
+            password: document.getElementById('userPassword').value
+          })
+        });
+        event.target.reset();
+        userStatus.textContent = 'User profile created. Share the organization slug, email, and password with that user.';
+        await loadUsers();
+      } catch (err) {
+        userStatus.textContent = err.message;
+      }
+    });
+
+    document.getElementById('flagForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      formStatus.textContent = 'Creating flag...';
+
+      try {
+        await request('/api/org-admin/feature-flags', {
+          method: 'POST',
+          body: JSON.stringify({
+            feature_key: document.getElementById('featureKey').value,
+            name: document.getElementById('flagName').value,
+            description: document.getElementById('description').value,
+            enabled: document.getElementById('enabled').value === 'true'
+          })
+        });
+        event.target.reset();
+        formStatus.textContent = 'Feature flag created.';
+        await loadFlags();
+      } catch (err) {
+        formStatus.textContent = err.message;
+      }
+    });
+
+    flagsEl.addEventListener('click', async (event) => {
+      const button = event.target.closest('button');
+      if (!button) return;
+
+      const action = button.dataset.action;
+
+      try {
+        if (action === 'toggle') {
+          await request(`/api/org-admin/feature-flags/${button.dataset.id}/toggle`, {
+            method: 'PATCH',
+            body: JSON.stringify({ enabled: button.dataset.enabled !== '1' })
+          });
+        }
+
+        if (action === 'edit') {
+          const flag = flagCache.get(button.dataset.id);
+          if (!flag) throw new Error('Flag could not be found locally. Refresh and try again.');
+          const featureKey = prompt('Feature key', flag.feature_key);
+          if (!featureKey) return;
+          const name = prompt('Display name', flag.name);
+          if (!name) return;
+          const description = prompt('Description', flag.description || '') || '';
+
+          await request(`/api/org-admin/feature-flags/${flag.id}`, {
+            method: 'PUT',
+            body: JSON.stringify({
+              feature_key: featureKey,
+              name,
+              description,
+              enabled: isEnabled(flag.enabled)
+            })
+          });
+        }
+
+        if (action === 'delete') {
+          const confirmed = confirm('Delete this feature flag?');
+          if (!confirmed) return;
+          await request(`/api/org-admin/feature-flags/${button.dataset.id}`, {
+            method: 'DELETE'
+          });
+        }
+
+        await loadFlags();
+      } catch (err) {
+        alert(err.message);
+      }
+    });
+
+    document.getElementById('refreshButton').addEventListener('click', loadFlags);
+    document.getElementById('logoutButton').addEventListener('click', () => {
+      localStorage.removeItem(tokenKey);
+      setSignedIn(false);
+    });
+
+    if (getToken()) {
+      setSignedIn(true);
+      Promise.all([loadFlags(), loadUsers()]);
+    }
+  </script>
+</body>
+</html>
